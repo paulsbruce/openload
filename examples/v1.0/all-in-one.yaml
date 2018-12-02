@@ -1,0 +1,247 @@
+openload: "1.0.0"
+info:
+  name: All-in-one Load Test Example
+  version: 1.0.1
+
+scopes: # defaults, variables, and other configuration can be within a scope
+  # known elements
+  default:
+    http:
+      headers: # headers that all http requests by default should inherit, unless overridden
+        user-agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10.14; rv:63.0) Gecko/20100101 Firefox/63.0
+        accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+        accept-language: en-US,en;q=0.5
+        accept-encoding: gzip, deflate, br
+      accept-encodings: # all http connections should post Accept-Encodings
+        - 'Gzip'
+        - 'Deflate'
+        - 'Brotli'
+    variables: # up front defaults; can be overridden by external executor
+      'api-key': # name of variable
+        type: static # just a string, that's all; happens to use groovy-based substitution below
+        default: ${my-super-secret-api-key} # see security section
+  'qa':
+    variables:
+      'google-host': qa.www.google.com # some pre-production host
+    http:
+      headers: # an example of a header that will always be added when running in 'qa' environment/scope
+        Environment-Echo: 'qa'
+  'prod':
+    variables:
+      'google-host': www.google.com # production host
+
+origins: # used to control reduce duplication and centralize host settings
+  'www_google_com': # name of origin/server
+    type: http # type is required, but type values are not limited, just reserved for common types
+    host:
+      $ref: '#/variables/google-host' # another way to pull in variables, not groovy
+    ssl: true # optional, inferred if port 443 specified
+    port: 443 # optional
+  'mosquitto': # an example of how host/origin information applies to more than http
+    type: mqtt
+    alias: mosquito-mqtt # optional attributes are per-type specific
+    protocol: tcp
+    host: test.mosquitto.org
+    ssl: true # optional, inferred if port 443 specified
+    port: 8883 # optional
+    clientId: clientId-rsqR89rkU3
+
+workflows:
+  'Google Search':
+    tags:
+      uuid: 2f3dcd2d-2ecf-48d8-a274-9f9bceb39f1d # tags can have values, such as a unique permanent test id
+      description: # or be empty
+    execution:
+      $ref: '#/common/runtime/hard-reset'
+    begin:
+      steps:
+        - $ref: '#/common/transactions/a-login-process' # a reference to a common pattern of traffic
+    end:
+    # steps at all levels are sequential by default
+    transaction: # group a bunch of subsequent actions together in a named aggregation group
+      name: Go to Home
+      description: "Navigate to the home page of the site"
+      steps: # sequential by default
+        http:
+          origin:
+            $ref '#/origins/www_google_com'
+          get: /
+          extract:
+            regex: "\\{kEI:'(.*?)'"
+            into:
+          extract:
+            xpath: "//input[@aria-label=\"I'm Feeling Lucky\"]/@id"
+            into: lucky_button_id
+          extract:
+            regex: "\\._CONFIG=\\[\\[\\[0,\"www\\.gstatic\\.com\",\"(.*?)\""
+            into: gstatic_k
+          expect:
+            exists: ${lucky_button_id}
+            otherwise: stopthread # default is to continue
+        parallel:
+          origin:
+            $ref '#/origins/www_google_com'
+          headers:
+            referer: https://www.google.com/
+          http:
+            get: /images/branding/googlelogo/2x/googlelogo_color_272x92dp.png
+          http:
+            get: /xjs/_/js/k=xjs.s.en_US.fciVZFTWDlk.O/m=sx,Fkg7bd,HcFEGb,IvlUe,MC8mtf,OF7gzc,RMhBfe,T4BAC,TJw5qb,TbaHGc,Y33vzc,cdos,cr,hsm,iDPoPb,jsa,mvYTse,tg8oTe,uz938c,vWNDde,ws9Tlc,xpltpb,yQ43ff,d,csi/am=DACLMAMB5P8UQAIIWAU2WCCDEoMS/rt=j/d=1/dg=2/rs=ACT90oER1Kbvnvu1QEwDm4_fKbF84pHs5w
+          http:
+            get: /images/nav_logo242.png
+        transcation:
+          name: Home Page Lazy Load Artifacts
+          steps:
+            http:
+              post:
+                origin:
+                  $ref '#/origins/www_google_com'
+                url: /gen_204?s=webhp&t=aft&atyp=csi&ei=${extracted_ei}&rt=wsrt.2211,aft.242,prt.146
+                headers:
+                  content-type: text/plain;charset=UTF-8
+                  te: trailers
+                expect:
+                  status: 204
+            parallel:
+              http:
+                get: https://ssl.gstatic.com/gb/images/i2_2ec824b0.png # you don't have to define origins
+                expect:
+                  status: 200
+              http:
+                get: https://www.gstatic.com/og/_/js/k=${gstatic_k}/rt=j/m=def/exm=in,fot/d=1/ed=1/rs=AA2YrTtk6bIjehY7NvXgbRVTkE2epg5Vig
+        http:
+          get: https://ssl.gstatic.com/gb/images/i2_2ec824b0.png # duplicate, but maintaining a cache, should result in
+          expect:
+            status: 304
+    # outside the above transaction
+    transaction:
+      $ref: '#/common/transactions/a-login-process'
+
+  'Fetch Test':
+    http:
+      get: https://www.wikipedia.org
+  'API Test':
+    tags:
+      - api
+    http:
+      put: http://api.yourdomain.com/v1/test
+      body: '
+        {
+          title: "testing"
+        }
+        '
+      extract:
+        jsonpath: "$.id"
+        into: new_entity_id
+
+common:
+  transactions:
+    transaction:
+      name: a-login-process
+      steps:
+        http:
+          get: https://www.google.com
+        http:
+          get: http://paulsbruce.io
+  runtime:
+    default:
+      when-error: continue # default, implied
+      when-assert-fail: continue # default, implied
+      after-iteration: auto # ???
+    'hard-reset':
+      when-error: reset # stop execution, dump session and restart in new containment
+      when-assert-fail: resume # keep session, move to next iteration
+      after-iteration: reset # reset session and dump cache
+      think-time:
+        override: 50% # or a specific static amount such as 3000ms
+        randomize: 10%
+
+protocols:
+  'HTTP/2.0':
+    '.*\.google\.com.*'
+
+distributions:
+  'Mixed Load':
+    'Google Search':
+      weight: 5 # will be calculated as 5/6 = 83%
+      overrides: # overrides are for top-level components
+        http:
+          headers: # override default of Firefox to Chrome
+            user-agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/70.0.3538.102 Safari/537.36
+          caching: reset
+      extensions:
+        network-virtualization:
+          download:
+            max: 528Kbps
+            latency: 350ms
+            packet-loss: 5%
+          upload:
+            max: 21Kbps
+            latency: 370ms
+            packet-loss: 0%
+    'Another Test':
+      weight: 1 # will be calculated as 1/6 = 17%
+      overrides:
+        http:
+          cookies: false
+          parallel-connections: 6
+          protocols:
+            'HTTP/2.0': false
+  'Just Google':
+    'Google Search':
+      weight: 1 # 100%
+
+execution:
+  plan:
+    name: Sanity Scenario
+    groups:
+      'Mixed Load':
+        distributions:
+          - $ref: '#/distributions/Mixed Load'
+        infrastructure:
+          include: all # is the default
+      'Just Google':
+        distributions:
+          - $ref: '#/distributions/Just Google'
+        infrastructure:
+          exclude:
+            tags:
+              US-WEST-1
+
+infrastructure:
+  'hub':
+    type: orchestrator
+    tags:
+      autorecover: false
+
+  '10.0.0.201':
+    type: node
+    tags:
+      US-WEST-1
+    uri: 'ssh://10.0.0.201:7100'
+    credentials: ...
+
+  'AWS Lambda': # completelyconceptual  placeholder
+    tags:
+      cloud
+    extensions:
+      computegroup: ...
+      max-node-throughput: 200rps
+      autoscale: true
+
+# monitoring and metrics:
+
+security:
+  schemes:
+    'bearer-auth':
+      type: http
+      scheme: bearer
+  '.*\.google\.com.*':
+    $ref: '#/authentication/bearer-auth'
+  external:
+    provider: hashicorp
+    options:
+      apiVersion: v1
+      endpoint: https://10.0.0.100:8200
+      query: secret/myApiKey
+      into: my-super-secret-api-key
