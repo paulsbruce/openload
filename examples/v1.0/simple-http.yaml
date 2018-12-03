@@ -1,0 +1,31 @@
+openload: "1.0.0"
+info:
+  name: Simple HTTP Example
+  version: 1.0.0
+
+workflows:
+  - 'Fetch Test':
+    - http:
+      get: https://www.wikipedia.org
+
+distributions:
+  - 'Fetch - Mobile':
+    workflow:
+      $ref: '#/workflows/Fetch Test' # default as 100% weight
+      override:
+        http:
+          headers:
+            user-agent: Mozilla/5.0 (Linux; Android 8.0.0; SM-G960F Build/R16NW) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/64.0.3282.137 Mobile Safari/537.36
+
+execution:
+  - 'Small Load Test':
+    distributions:
+      - $ref: '#/distributions/Fetch - Mobile'
+    volume:
+      type: ramp
+      min: 1
+      max: 50
+      add: 1
+      every: 5s
+
+#infrastructure: # will use defaults, orchestrator and one load node
