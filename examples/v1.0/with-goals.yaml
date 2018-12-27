@@ -11,9 +11,11 @@ objectives: # what to do with metrics
     executions:
       - $ref: '#/execution/Batch Session Create'
     signals:
-      - 'med(dur) > 500ms':
+      - '90p(dur) > 500ms':
         metric: duration
         scope: http # specifying none will default to all scopes: transaction, parallel, or activity
+        aggregate: 90p # percentile
+        sampling-interval: 1m
         when:
           greater-than: 500ms
           fail: 'Duration too long, outside acceptable range'
@@ -25,9 +27,10 @@ objectives: # what to do with metrics
           fail: 'Duration to short to be realistic; session may not be getting created.'
   - 'Never cost CPU > 5% per 20 new sessions':
     signals:
-      - 'CPU > 5% increase':
+      - 'med(CPU) > 5% increase':
         metric: 'CPU User'
         scope: '#/monitoring/Web front-end'
+        aggregate: median
         sampling-interval: 5s
         when:
           increases-by: 5%
