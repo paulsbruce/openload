@@ -1,0 +1,119 @@
+openload: "1.0.0"
+info:
+  name: Goal definitions example
+  version: 1.0.0
+
+## This example is written the opposite way around from other examples to show that
+## you can define your objectives up front, then build out how to test for them
+
+objectives: # what to do with metrics
+  - 'Receive 100 sessions with med(dur) < 500ms':
+    executions:
+      - $ref: '#/execution/Batch Session Create'
+    signals:
+      - 'med(dur) > 500ms':
+        metric: duration
+        scope: http # specifying none will default to all scopes: transaction, parallel, or activity
+        when:
+          greater-than: 500ms
+          fail: 'Duration too long, outside acceptable range'
+      - 'med(dur) < 15ms':
+        metric: duration
+        scope: '#/workflows/Fetch Test/Load Home Page'
+        when:
+          less-than: 15ms
+          fail: 'Duration to short to be realistic; session may not be getting created.'
+  - 'Never cost CPU > 5% per 20 new sessions':
+    signals:
+      - 'CPU > 5% increase':
+        metric: 'CPU User'
+        scope: '#/monitoring/Web front-end'
+        sampling-interval: 5s
+        when:
+          increases-by: 5%
+          across-prior: 3 # how many samples to go back
+          fail: 'CPU use increased outside acceptable range'
+
+monitoring: # how to collect metrics
+  - 'Web front-end':
+    type: linux
+    metadata:
+      host: ${FEhostname}
+      method: ssh
+      username: '${monUser}'
+      username: '${monPw}'
+    metrics: # if not specified, collects all metrics
+      include: # if includes specified, don't collect anything else; opposite of 'exclude'
+      - 'CPU User'
+      - '% User Memory'
+  - 'In-app Telemetry':
+    type: graphite
+    metadata:
+      host: ${GraphiteServer}
+    metrics:
+      include:
+        - 'Loaded sessions per minute':
+          query: summarize(stats_counts.transactions.session_loaded, '1min')
+
+execution: # how to distribute simulated load to verify objectives
+  - 'Sanity Test':
+    distributions:
+      - $ref: '#/distributions/Fetch Scenario'
+    volume:
+      type: fixed
+      iterations: 1
+  - 'Batch Session Create':
+    distributions:
+      - $ref: '#/distributions/Fetch Scenario'
+    volume:
+      type: cycle
+      min: 100 # start threads all at once to see how this affects session spin-up
+      every: 1m
+  - 'Ramp New Sessions by 20/min':
+    distributions:
+      - $ref: '#/distributions/Fetch Scenario'
+    volume:
+      type: ramp
+      min: 20
+      max: 500
+      add: 20
+      every: 1m
+
+workflows: # what targets and traffic patterns to use
+  - 'Fetch Test':
+    - transaction: # group a bunch of subsequent actions together in a named aggregation group
+      name: Load Home Page
+      steps:
+        - http:
+          get: https://${FEhostname}
+
+scopes:
+  default:
+    variables:
+      - 'FEhostname': '10.0.1.50' # mywebserver
+      - 'SecretsServerAndPort': '10.0.0.100:8200' # hashicorp
+      - 'GraphiteServer': 'somenode.domain.com' # mywebserver
+
+commons:
+  runtime:
+    default:
+      after-iteration: reset # reset session and dump cache
+
+distributions:
+  - 'Fetch Scenario':
+    workflow:
+      $ref: '#/workflows/Fetch Test'
+
+security:
+  external:
+    provider: hashicorp
+    options:
+      apiVersion: v1
+      endpoint: https://${SecretsServerAndPort}
+      secrets:
+        - 'Linux Monitoring Username':
+          query: secret/linuxMonitoringAgentUser
+          into: monUser
+        - 'Linux Monitoring Passwword':
+          query: secret/linuxMonitoringAgentPass
+          into: monPw
